@@ -1,14 +1,3 @@
-/*
-Capturing from ALSA
-From Paul David's tutorial : http://equalarea.com/paul/alsa-audio.html
-
-sudo apt-get install libasound2-dev
-gcc -o alsa-record-example -lasound alsa-record-example.c && ./alsa-record-example hw:0
-
-GPU_FFT thanks to Andrew Holme
-
-other chunks of ccode copied wholesale from PeterO of raspberrypi.org, many thanks!
-*/
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,19 +12,18 @@ other chunks of ccode copied wholesale from PeterO of raspberrypi.org, many than
 
 #include "mailbox.h"
 #include "gpu_fft.h"
-//#include "tone.h"
 
 void writeToFile(char* reading);
 void spectrumAnalyzer();
 int fft_compute_forward(float * input, int log2_N, float * output, double sampling_interval);
 void *playTone(void *f);
 
-int peakFrequencies[32768];
+
 float peakAndIntensity[32768][2]; // Can be optimized ?
-float playedPeakAndIntensity[32768][2];
+float foundPeakFrequency[32768][2];
 float BPF[32768][3];
 
-int peakCount = 0;
+int globalPeakCount = 0;
 int frequency = 100;
 char* speakerID = "hw:0,0";
 char* micID = "hw:1,0";
@@ -47,10 +35,13 @@ char* micID = "hw:1,0";
 
 main(int argc, char *argv[])
 {
+	// pthread is a multithreading library
+	// In this case playTone() function is runned in a seperate thread
 	pthread_t toneThread;
-	pthread_create(&toneThread,NULL,playTone,(void *)frequency);
 	
+	pthread_create(&toneThread,NULL,playTone,(void *)frequency);
 	spectrumAnalyzer();
+	
 	pthread_exit(NULL);
 }
 
@@ -89,82 +80,70 @@ void spectrumAnalyzer(){
 		
 	float *FFTData;	
 	int NLOG2 = 15;
-	unsigned long N = 1 << NLOG2;
-	printf("N = %6.4d\n", N);
+	unsigned long N = 1 << NLOG2; // Used to determine maximum frequency count of FFT, "Bitwise left operation"
 	FFTData = malloc(N * sizeof(float));	
-	
-	static struct timeval tm1,tm2;
 	float freqResolution = recordRate / recordBufferLenght;
-	int freq = 0;
 	int i,j;
-	int counter = 0;
+	
+	// Array to store all peak frequencies
 	int peakFreqIndex[recordBufferLenght];
-	//int intensityPeakFrequencies[recordBufferLenght];
 	
 	int internalPeakCount = 0;
 	
 	
 	//@TODO Reallocate BPF initialization
+	BPF[200][0] = 1;
 	BPF[220][0] = 1;
+	BPF[300][0] = 1;
 	BPF[500][0] = 1;
 	
 
 	
-	
 	while(1){
 	
 		internalPeakCount = 0;
-		gettimeofday(&tm1,NULL);
 		
-		//read from audio device into buffer
+		//Record audio to recordBuffer
 		snd_pcm_readi(capture_handle, recordBuffer, recordBufferLenght);
 
 		for (i = 0; i < recordBufferLenght; i++){
-			fRecordBuffer[i] = (float)recordBuffer[i] * (0.54 - (0.46 * (cos(2*M_PI*(i/(recordBufferLenght - 1)))))); // Convert to float, apply hammin window
-			peakFreqIndex[i] = 0; // Initialize to 0
-			peakFrequencies[i] = 0;
-			
+			fRecordBuffer[i] = (float)recordBuffer[i] * (0.54 - (0.46 * (cos(2*M_PI*(i/(recordBufferLenght - 1)))))); // Convert to float, apply hammin window			
 		}
-
-	
+		
+		// Apply FFT to fRecordBuffer
 		fft_compute_forward(fRecordBuffer, NLOG2, FFTData, 1);	
-		
-		// Calculate peak Hz
-		int peakIndex = 0;
-		float peakValue = 0;
-		
-		char reading[100];
+		fprintf(stdout, "asd\n");
+		// Find frequency with the highest intensity(Amplitude)
+		int peakIntensityIndex = 0;
+		float peakIntensity = 0;
 		
 		for(i = 0; i <= recordBufferLenght/2; i ++){
-			if(FFTData[i] > peakValue){
-				peakValue = FFTData[i];
-				peakIndex = i;
+			if(FFTData[i] > peakIntensity){
+				peakIntensity = FFTData[i];
+				peakIntensityIndex = i;
 			}
 		}
-		
-		// Peak finding test
-		int intensityIndex = 0;
-		for(i = 1; i<(recordBufferLenght)/2; i ++){ // index BUG?
+
+		// Peak finding
+		// This algorithm tries to find all frequency peaks based on their intensities(Amplitudes)
+
+		for(i = 1; i< recordBufferLenght/2; i ++){ // @TODO index BUG?
 			if(FFTData[i] > FFTData[i-1] && FFTData[i] > FFTData[i+1]){
-				peakFreqIndex[intensityIndex] = i;
-				intensityIndex++;
 				peakAndIntensity[0][i] = (((i * freqResolution) * 1.3459689603076) - 2);
-				peakAndIntensity[1][i] = (FFTData[i] / peakValue) * 10000;
+				peakAndIntensity[1][i] = (FFTData[i] / peakIntensity) * 10000;
 				if(peakAndIntensity[0][i] > 100 && peakAndIntensity[1][i] > 500){
 					printf("Peak found. [%d]: F: %f, Intensity: %f RAW DATA: %d\n",i, peakAndIntensity[0][i] , peakAndIntensity[1][i], FFTData[i]);
-					playedPeakAndIntensity[0][internalPeakCount] = peakAndIntensity[0][i];
-					playedPeakAndIntensity[1][internalPeakCount] = peakAndIntensity[1][i];
+					foundPeakFrequency[0][internalPeakCount] = peakAndIntensity[0][i];
+					foundPeakFrequency[1][internalPeakCount] = peakAndIntensity[1][i];
 					internalPeakCount++;
 				}
 			}
 		}
-		peakCount = internalPeakCount;
+		
+		globalPeakCount = internalPeakCount;
+}// End of while loop
 
 
-		gettimeofday(&tm2,NULL);
-		unsigned long long t = (tm2.tv_usec - tm1.tv_usec);
-		//printf("FFT TIME: %llu ms\n\n",t/1000);
-}
 	snd_pcm_close(capture_handle);
 }
 
@@ -231,8 +210,6 @@ void *playTone(void *f)
 		snd_pcm_hw_params_free(hw_params);
 		snd_pcm_prepare(phandle);
 
-		static struct timeval tm1,tm2;
-		
 		static int internalPhase[12000];
 		
 		int phase;
@@ -242,50 +219,43 @@ void *playTone(void *f)
 		
 		while(1){
 		
-		//printf("OUTPUT frequency: %d\n", frequency);
-		
 		// Generate a sine wave
 		float volume = 0.1;
 		
 		
-		// Clear
+		// Clear playbackBuffer
 		for (i = 0; i < playbackBufferLenght; i++){
 			playbackBuffer[i] = 0;
 		}
-		printf("PeakCount: %d\n", peakCount);
+		
 			
-		for (i = 0; i < peakCount; i++)
-		{
-			int freq = (int)floor(playedPeakAndIntensity[0][i]);
-			printf("F: %d\n", freq);
-			if( (BPF[freq][0]) != 1){
+		for (i = 0; i < globalPeakCount; i++){
+			// Here we check wheter a certain peak frequency is listed in the Bandwidth Pass Filter
+			// BPF 2D-array is structured so, that each row's index represents a corresponding frequency 
+			// First column (index 0) contains numeric value 0 or 1. If value is set to 1, frequency is allowed to pass through.
+			// e.g. BPF[100][0] = 1; 100Hz frequency is passed 
+			//		BPF[123][0] = 0; 123Hz frequency is not passed
+			
+			//Here we check if BPF contains 1 or 0
+			// (int)floor(foundPeakFrequency[0][i]) returns a found frequency.
+			// if 1 is not found, For look runs to break; and found frequency peak is not added to the output sound signal
+			if( (BPF[ (int)floor(foundPeakFrequency[0][i])][0]) != 1){
 				break;
 			}
-			//printf("F: %d   PHASE: %d\n", (int)floor(playedPeakAndIntensity[0][i]), phase);
-			phase = internalPhase[(int)floor(playedPeakAndIntensity[0][i])];
+			
+			phase = internalPhase[(int)floor(foundPeakFrequency[0][i])];
 			
 			for (j = 0; j < playbackBufferLenght; j++)
 			{	
-				playbackBuffer[j] += htole16(double_to_int16_t(volume * ((double)  (sin(playedPeakAndIntensity[0][i] * (2 * M_PI) * phase / playbackRate)) )));
+				playbackBuffer[j] += htole16(double_to_int16_t(volume * ((double)  (sin(foundPeakFrequency[0][i] * (2 * M_PI) * phase / playbackRate)) )));
 				phase++;
-				internalPhase[(int)floor(playedPeakAndIntensity[0][i])] = phase;
+				internalPhase[(int)floor(foundPeakFrequency[0][i])] = phase;
 			}
 		}
 		
-
-		
-		//printf("TONE FREQUENCY: %d",peakFrequencies[0]);
+		//Write playbackBuffer to audio driver (Play generated tone)
 		for (i = 0; i < 1; i++) {
-			gettimeofday(&tm1,NULL);
-			
 			snd_pcm_writei(phandle, playbackBuffer, playbackBufferLenght);
-			
-			
-			gettimeofday(&tm2,NULL);
-			unsigned long long t = (tm2.tv_usec - tm1.tv_usec);
-			//printf("TONE GENERATOR TIME: %llu ms\n",t/1000);
-			printf("\n");
-			
 		}
 
 }
@@ -294,6 +264,7 @@ void *playTone(void *f)
     return 0;
 }
 
+// function for saving values to .txt file
 void writeToFile(char* reading){
 
 	char *filePath = "/home/pi/Documents/AANC/test.txt";
