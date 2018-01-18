@@ -21,7 +21,10 @@ void *playTone(void *f);
 
 float peakAndIntensity[32768][2]; // Can be optimized ?
 float foundPeakFrequency[32768][2];
-float BPF[32768][3];
+float BPF[12000][2]; // 12Khz max freq
+float sourceDistance = 2.0;
+#define airTemperature 20
+float soundVelocity = 331 + (0.6 * airTemperature); // v = 331m/s + 0.6m/s/C * T
 
 int globalPeakCount = 0;
 int frequency = 100;
@@ -47,7 +50,6 @@ main(int argc, char *argv[])
 
 
 void spectrumAnalyzer(){
-	
 	
 	int16_t *recordBuffer;
 	float* fRecordBuffer;
@@ -90,6 +92,20 @@ void spectrumAnalyzer(){
 	
 	int internalPeakCount = 0;
 	
+	// Phase calculation in angles for each frequency from 1 Hz to 12KHz
+	for(i = 1; i <= 12000; i++){
+		
+		/* 
+		i = f
+		T = 1 / i
+		Phase = 180 - ( ( (1-(d/vT)) / T) * 360)
+		*/
+		
+		double numerator = (1 - (sourceDistance/(soundVelocity * 1/i)));
+		
+		BPF[i][1] = fmod(180 - ( (numerator/ (1.00/i)) * 360),360.0);
+		printf("Phase: %.10f\n", BPF[i][1]);
+	}
 	
 	//@TODO Reallocate BPF initialization
 	BPF[200][0] = 1;
