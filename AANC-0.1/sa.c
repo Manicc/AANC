@@ -6,6 +6,7 @@
 #include <math.h>
 #include <time.h>
 #include <limits.h>
+#include <float.h>
 
 #include <pthread.h>
 #include <alsa/asoundlib.h>
@@ -166,11 +167,11 @@ void spectrumAnalyzer(){
 		for(i = 1; i< recordBufferLenght/2; i ++){ // @TODO index BUG?
 			if(FFTData[i] > FFTData[i-1] && FFTData[i] > FFTData[i+1]){
 
-				if( ((i * freqResolution) > 50) && (FFTData[i]  > 10000000000000) ){
+				if( ((i * freqResolution) > 0) && (FFTData[i] / peakIntensity) * 10000 > 3000) {
 					
 					foundPeakFrequency[0][internalPeakCount] = i * freqResolution;
-					foundPeakFrequency[1][internalPeakCount] = FFTData[i];//(FFTData[i] / peakIntensity) * 10000;
-					printf("Peak found. [%d]: F: %f, Intensity: %f, RAW intensity: %f \n",i, foundPeakFrequency[0][internalPeakCount] , foundPeakFrequency[1][internalPeakCount], FFTData[i]);
+					foundPeakFrequency[1][internalPeakCount] = (FFTData[i] / peakIntensity) * 10000;
+					printf("Peak found. [%d]: F: %f, Intensity: %f, Readable intensity: %f \n",i, foundPeakFrequency[0][internalPeakCount] , foundPeakFrequency[1][internalPeakCount], (FFTData[i] / peakIntensity) * 10000 );
 					internalPeakCount++;
 				}
 			}
@@ -269,7 +270,7 @@ void *playTone(void *f)
 		bufferIndexTimeOffset = 0;
 		
 		// Generate a sine wave
-		float volume = 0.01;
+		float volume = 0;
 		
 		// Clear playbackBuffer
 		for (i = 0; i < playbackBufferLenght; i++){
@@ -278,52 +279,13 @@ void *playTone(void *f)
 
 		
 		for (i = 0; i < globalPeakCount; i++){
-			//static float phase;
-		
-		
 			
-			//// Phase calculation
-			///* 
-			//i = f
-			//T = 1 / i
-			//Phase = 180 - ( ( (1-(d/vT)) / T) * 360)
-			//*/
+			// Calculate volume of output frequency based on FFT intensity (Amplitude)
+			// FFT outputs intensity ranging from 0 - FLT_MAX ( 1*E^37) // Value of FLT_MAX is way too large 
+			// This needs to be scaled to 0-1 range ( Or something similar )
 			
-			//double numerator = (1 - (sourceDistance/(soundVelocity * (1.0/ foundPeakFrequency[0][i]) )));
-			//double angle = fmod(abs(180- (numerator/ (1.0/ (foundPeakFrequency[0][i]) )) * 360.0),360.0);
-
-		
-			//// Todo phase = offset from BPF phase element;
-			//float radPhase = (angle * (M_PI / 180.0));
-			//float timeShift = (radPhase / ( 360.0 * (int)floor(foundPeakFrequency[0][i])));
-			////bufferIndexTimeOffset = timeResolution/timeShift;
-			//phase = (timeShift) / timeResolution;
-			
-			//printf("\nINDEX: %d\n", i);
-			//printf("timeResolution: %f\n", timeResolution);
-			//printf("Numerator: %f\n", numerator);
-			//printf("Angle: %f\n", angle);
-			//printf("Rad: %f\n", radPhase);
-			//printf("Frequency: %f\n" , foundPeakFrequency[0][i]);
-			//printf("TIME SHIFT %f\n" , timeShift);
-			////printf("BufferIndexTimeOffset %f\n" , bufferIndexTimeOffset);
-			//printf("Phase %f\n" , phase);
-			
-			////internalPhase[(int)floor(foundPeakFrequency[0][i])] = phase; // Reset phase value to 0 if frequency was not played in last loop cycle
-			//printf("PHASE RESET\n");
-			
-			
-			
-			
-			//phase = internalPhase[(int)floor(foundPeakFrequency[0][i])];
-			//printf("Phase %f\n" , phase);
-			//phase += ((stopTime.tv_nsec - startTime.tv_nsec) / 1000000.0/ timeResolution);
-			
-			
-			
-			
-			
-			
+			volume = (foundPeakFrequency[1][i] * 0.1) / 10000;
+			printf("Volume: %f\n", volume);
 			
 			// Here we check wheter a certain peak frequency is listed in the Bandwidth Pass Filter
 			// BPF 2D-array is structured so, that each row's index represents a corresponding frequency 
@@ -331,7 +293,7 @@ void *playTone(void *f)
 			// e.g. BPF[100][0] = 1; 100Hz frequency is passed 
 			//		BPF[123][0] = 0; 123Hz frequency is not passed
 			
-			//Here we check if BPF contains 1 or 0
+			//Here we check if BPF contains 1 or 00
 			// (int)floor(foundPeakFrequency[0][i]) returns a found frequency.
 			// if 1 is not found, For look runs to break; and found frequency peak is not added to the output sound signal
 			if( (BPF[ (int)floor(foundPeakFrequency[0][i])][0]) != 1){
