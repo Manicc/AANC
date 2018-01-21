@@ -19,19 +19,23 @@ int fft_compute_forward(float * input, int log2_N, float * output, double sampli
 void *playTone(void *f);
 
 
-float peakAndIntensity[32768][2]; // Can be optimized ?
-float foundPeakFrequency[32768][2];
+float peakAndIntensity[10000][2]; // Can be optimized ?
+float foundPeakFrequency[10000][2];
 float BPF[12000][2]; // 12Khz max freq
-float sourceDistance = 2.0;
+
+float phaseArray[10000][12];
+float sourceDistance = 0.50;
 #define airTemperature 20
-float soundVelocity = 331 + (0.6 * airTemperature); // v = 331m/s + 0.6m/s/C * T
+float soundVelocity = 331.0 + (0.6 * airTemperature); // v = 331m/s + 0.6m/s/C * T
+
+long timeTaken = 0;
 
 int globalPeakCount = 0;
 int frequency = 100;
 char* speakerID = "hw:0,0";
 char* micID = "hw:1,0";
 
-
+static struct timespec startTime, stopTime;
 
 
 
@@ -53,7 +57,7 @@ void spectrumAnalyzer(){
 	
 	int16_t *recordBuffer;
 	float* fRecordBuffer;
-	int recordBufferLenght = 32768;
+	int recordBufferLenght = 524288;
 	unsigned int recordRate = 44100;
 	
 	int err;
@@ -81,10 +85,10 @@ void spectrumAnalyzer(){
 	fprintf(stdout, "recordBuffer allocated\n");
 		
 	float *FFTData;	
-	int NLOG2 = 15;
+	int NLOG2 = 19;
 	unsigned long N = 1 << NLOG2; // Used to determine maximum frequency count of FFT, "Bitwise left operation"
 	FFTData = malloc(N * sizeof(float));	
-	float freqResolution = recordRate / recordBufferLenght;
+	float freqResolution = 0.084114074707031;
 	int i,j;
 	
 	// Array to store all peak frequencies
@@ -92,32 +96,46 @@ void spectrumAnalyzer(){
 	
 	int internalPeakCount = 0;
 	
-	// Phase calculation in angles for each frequency from 1 Hz to 12KHz
-	for(i = 1; i <= 12000; i++){
-		
-		/* 
-		i = f
-		T = 1 / i
-		Phase = 180 - ( ( (1-(d/vT)) / T) * 360)
-		*/
-		
-		double numerator = (1 - (sourceDistance/(soundVelocity * 1/i)));
-		
-		BPF[i][1] = fmod(180 - ( (numerator/ (1.00/i)) * 360),360.0);
-		printf("Phase: %.10f\n", BPF[i][1]);
-	}
+	
 	
 	//@TODO Reallocate BPF initialization
 	BPF[200][0] = 1;
 	BPF[220][0] = 1;
 	BPF[300][0] = 1;
+	BPF[440][0] = 1;
+	BPF[499][0] = 1;
 	BPF[500][0] = 1;
+	BPF[501][0] = 1;
+	BPF[1000][0] = 1;
 	
+	float timeUnit = 1.0/44100.0;
+	for(i = 1; i <= 10000; i++){
+		for(j = 0; i < 12; i++){
+				// Phase calculation
+			/* 
+			i = f
+			T = 1 / i
+			Phase = 180 - ( ( (1-(d/vT)) / T) * 360)
+			*/
+			float freq = (i + (j * freqResolution));
+			
+			double numerator = (1 - (sourceDistance/(soundVelocity * (1.0/ freq) )));
+			double angle = fmod(abs(180- (numerator/ (1.0/ freq * 360.0))),360.0);
 
+		
+			// Todo phase = offset from BPF phase element;
+			float radPhase = (angle * (M_PI / 180.0));
+			float timeShift = (radPhase / ( 360.0 * (int)floor(foundPeakFrequency[0][i])));
+			//bufferIndexTimeOffset = timeResolution/timeShift;
+			phaseArray[i][j] = timeShift / timeUnit;
+		}
+	}
 	
+	fprintf(stdout, "Phases calculated\n");
 	while(1){
 	
 		internalPeakCount = 0;
+		clock_gettime(CLOCK_MONOTONIC,&startTime);
 		
 		//Record audio to recordBuffer
 		snd_pcm_readi(capture_handle, recordBuffer, recordBufferLenght);
@@ -128,7 +146,9 @@ void spectrumAnalyzer(){
 		
 		// Apply FFT to fRecordBuffer
 		fft_compute_forward(fRecordBuffer, NLOG2, FFTData, 1);	
-		fprintf(stdout, "asd\n");
+		
+		
+
 		// Find frequency with the highest intensity(Amplitude)
 		int peakIntensityIndex = 0;
 		float peakIntensity = 0;
@@ -145,18 +165,20 @@ void spectrumAnalyzer(){
 
 		for(i = 1; i< recordBufferLenght/2; i ++){ // @TODO index BUG?
 			if(FFTData[i] > FFTData[i-1] && FFTData[i] > FFTData[i+1]){
-				peakAndIntensity[0][i] = (((i * freqResolution) * 1.3459689603076) - 2);
-				peakAndIntensity[1][i] = (FFTData[i] / peakIntensity) * 10000;
-				if(peakAndIntensity[0][i] > 100 && peakAndIntensity[1][i] > 500){
-					printf("Peak found. [%d]: F: %f, Intensity: %f RAW DATA: %d\n",i, peakAndIntensity[0][i] , peakAndIntensity[1][i], FFTData[i]);
-					foundPeakFrequency[0][internalPeakCount] = peakAndIntensity[0][i];
-					foundPeakFrequency[1][internalPeakCount] = peakAndIntensity[1][i];
+
+				if( ((i * freqResolution) > 50) && (FFTData[i]  > 10000000000000) ){
+					
+					foundPeakFrequency[0][internalPeakCount] = i * freqResolution;
+					foundPeakFrequency[1][internalPeakCount] = FFTData[i];//(FFTData[i] / peakIntensity) * 10000;
+					printf("Peak found. [%d]: F: %f, Intensity: %f, RAW intensity: %f \n",i, foundPeakFrequency[0][internalPeakCount] , foundPeakFrequency[1][internalPeakCount], FFTData[i]);
 					internalPeakCount++;
 				}
 			}
 		}
-		
+				fprintf(stdout, "asd\n");
 		globalPeakCount = internalPeakCount;
+		
+
 }// End of while loop
 
 
@@ -228,24 +250,81 @@ void *playTone(void *f)
 
 		static int internalPhase[12000];
 		
-		int phase;
+		static int lastFreqPlayed[12000];
+		static int newFreqPlayed[12000];
+		float timeResolution = 1.0 / playbackRate;
+		int bufferIndexTimeOffset = 0;
+		//float phase = 0;
+		for(i = 0; i<= 12000;i++){
+			lastFreqPlayed[i] = 0;
+		}
 		
+		int timeIndex = 4;
+		double timeDif = 0;
 		
-		
-		
+		float speakerOffset = 2;
 		while(1){
 		
-		// Generate a sine wave
-		float volume = 0.1;
 		
+		bufferIndexTimeOffset = 0;
+		
+		// Generate a sine wave
+		float volume = 0.01;
 		
 		// Clear playbackBuffer
 		for (i = 0; i < playbackBufferLenght; i++){
 			playbackBuffer[i] = 0;
 		}
+
+		
+		for (i = 0; i < globalPeakCount; i++){
+			//static float phase;
+		
 		
 			
-		for (i = 0; i < globalPeakCount; i++){
+			//// Phase calculation
+			///* 
+			//i = f
+			//T = 1 / i
+			//Phase = 180 - ( ( (1-(d/vT)) / T) * 360)
+			//*/
+			
+			//double numerator = (1 - (sourceDistance/(soundVelocity * (1.0/ foundPeakFrequency[0][i]) )));
+			//double angle = fmod(abs(180- (numerator/ (1.0/ (foundPeakFrequency[0][i]) )) * 360.0),360.0);
+
+		
+			//// Todo phase = offset from BPF phase element;
+			//float radPhase = (angle * (M_PI / 180.0));
+			//float timeShift = (radPhase / ( 360.0 * (int)floor(foundPeakFrequency[0][i])));
+			////bufferIndexTimeOffset = timeResolution/timeShift;
+			//phase = (timeShift) / timeResolution;
+			
+			//printf("\nINDEX: %d\n", i);
+			//printf("timeResolution: %f\n", timeResolution);
+			//printf("Numerator: %f\n", numerator);
+			//printf("Angle: %f\n", angle);
+			//printf("Rad: %f\n", radPhase);
+			//printf("Frequency: %f\n" , foundPeakFrequency[0][i]);
+			//printf("TIME SHIFT %f\n" , timeShift);
+			////printf("BufferIndexTimeOffset %f\n" , bufferIndexTimeOffset);
+			//printf("Phase %f\n" , phase);
+			
+			////internalPhase[(int)floor(foundPeakFrequency[0][i])] = phase; // Reset phase value to 0 if frequency was not played in last loop cycle
+			//printf("PHASE RESET\n");
+			
+			
+			
+			
+			//phase = internalPhase[(int)floor(foundPeakFrequency[0][i])];
+			//printf("Phase %f\n" , phase);
+			//phase += ((stopTime.tv_nsec - startTime.tv_nsec) / 1000000.0/ timeResolution);
+			
+			
+			
+			
+			
+			
+			
 			// Here we check wheter a certain peak frequency is listed in the Bandwidth Pass Filter
 			// BPF 2D-array is structured so, that each row's index represents a corresponding frequency 
 			// First column (index 0) contains numeric value 0 or 1. If value is set to 1, frequency is allowed to pass through.
@@ -256,24 +335,35 @@ void *playTone(void *f)
 			// (int)floor(foundPeakFrequency[0][i]) returns a found frequency.
 			// if 1 is not found, For look runs to break; and found frequency peak is not added to the output sound signal
 			if( (BPF[ (int)floor(foundPeakFrequency[0][i])][0]) != 1){
-				break;
+				//break;
 			}
 			
-			phase = internalPhase[(int)floor(foundPeakFrequency[0][i])];
-			
-			for (j = 0; j < playbackBufferLenght; j++)
+			// Phase array index calculation
+			int freqInteger = (int)foundPeakFrequency[0][i];
+			int freqDecimal = (int)(fmod(foundPeakFrequency[0][i], (int)foundPeakFrequency[0][i]) / 0.084114074707031 ); // modulo / frequency resolution
+			//printf("phaseArray indicies: i: %d  j: %d\n", freqInteger, freqDecimal);
+			for (j = 0; j <= playbackBufferLenght; j++)
 			{	
-				playbackBuffer[j] += htole16(double_to_int16_t(volume * ((double)  (sin(foundPeakFrequency[0][i] * (2 * M_PI) * phase / playbackRate)) )));
-				phase++;
-				internalPhase[(int)floor(foundPeakFrequency[0][i])] = phase;
+				playbackBuffer[j] += htole16(double_to_int16_t(volume * ((double)  (sin((foundPeakFrequency[0][i] + speakerOffset) * (2 * M_PI) * phaseArray[freqInteger][freqDecimal] / playbackRate)) )));
+				//internalPhase[(int)floor(foundPeakFrequency[0][i])] = phase;
+				//internalPhase[(int)floor(foundPeakFrequency[0][i])] = phase;
+				phaseArray[freqInteger][freqDecimal]++;
+				//if(phase > ( ((1.0/foundPeakFrequency[0][i]) + speakerOffset) / (1.0/44100) )){
+					//phase = 0;
+				//}
 			}
+		//	printf("Phase: %f\n", phaseArray[freqInteger][freqDecimal]);
 		}
+
+
 		
 		//Write playbackBuffer to audio driver (Play generated tone)
 		for (i = 0; i < 1; i++) {
 			snd_pcm_writei(phandle, playbackBuffer, playbackBufferLenght);
 		}
+		
 
+	
 }
 	snd_pcm_close(phandle);
 
