@@ -20,11 +20,11 @@ int fft_compute_forward(float * input, int log2_N, float * output, double sampli
 void *playTone(void *f);
 
 
-float peakAndIntensity[10000][2]; // Can be optimized ?
+float peakAndIntensity[10000][2]; // Can be optimized ? 
 float foundPeakFrequency[10000][2];
 float BPF[12000][2]; // 12Khz max freq
 
-float phaseArray[10000][12];
+float phaseArray[10000][96];
 float sourceDistance = 0.50;
 #define airTemperature 20
 float soundVelocity = 331.0 + (0.6 * airTemperature); // v = 331m/s + 0.6m/s/C * T
@@ -58,10 +58,13 @@ void spectrumAnalyzer(){
 	
 	int16_t *recordBuffer;
 	float* fRecordBuffer;
-	int recordBufferLenght = 524288;
+	float *zeroPaddedRecordBuffer;
+	int zeroPaddedRecordBufferLenght = 4194304;
+	int recordBufferLenght = 262144;
 	unsigned int recordRate = 44100;
 	
 	int err;
+	int i,j;
 
 	// Initialize audio in
 	snd_pcm_t *capture_handle;
@@ -83,14 +86,20 @@ void spectrumAnalyzer(){
 	//allocate buffer of 16bit ints, as specified in PCM_FORMAT
 	recordBuffer = malloc(recordBufferLenght * snd_pcm_format_width(format) / 8 * 2); // 
 	fRecordBuffer = malloc(recordBufferLenght*sizeof(float));
+	zeroPaddedRecordBuffer = malloc(zeroPaddedRecordBufferLenght*sizeof(float));
+	
 	fprintf(stdout, "recordBuffer allocated\n");
+	
+	for(i = 0; i < zeroPaddedRecordBufferLenght; i++){
+		zeroPaddedRecordBuffer[i] = 0;
+	}
 		
 	float *FFTData;	
-	int NLOG2 = 19;
+	int NLOG2 = 22;
 	unsigned long N = 1 << NLOG2; // Used to determine maximum frequency count of FFT, "Bitwise left operation"
 	FFTData = malloc(N * sizeof(float));	
-	float freqResolution = 0.084114074707031;
-	int i,j;
+	float freqResolution = 0.010514259338379;
+	
 	
 	// Array to store all peak frequencies
 	int peakFreqIndex[recordBufferLenght];
@@ -111,7 +120,7 @@ void spectrumAnalyzer(){
 	
 	float timeUnit = 1.0/44100.0;
 	for(i = 1; i <= 10000; i++){
-		for(j = 0; i < 12; i++){
+		for(j = 0; i < 96; i++){
 				// Phase calculation
 			/* 
 			i = f
@@ -145,8 +154,13 @@ void spectrumAnalyzer(){
 			fRecordBuffer[i] = (float)recordBuffer[i] * (0.54 - (0.46 * (cos(2*M_PI*(i/(recordBufferLenght - 1)))))); // Convert to float, apply hammin window			
 		}
 		
+		// Move recorded data to padded buffer
+		for(i = 0; i < recordBufferLenght; i++){
+			zeroPaddedRecordBuffer[i] = fRecordBuffer[i];
+		}
+		
 		// Apply FFT to fRecordBuffer
-		fft_compute_forward(fRecordBuffer, NLOG2, FFTData, 1);	
+		fft_compute_forward(zeroPaddedRecordBuffer, NLOG2, FFTData, 1);	
 		
 		
 
@@ -303,7 +317,7 @@ void *playTone(void *f)
 			// Phase array index calculation
 			int freqInteger = (int)foundPeakFrequency[0][i];
 			int freqDecimal = (int)(fmod(foundPeakFrequency[0][i], (int)foundPeakFrequency[0][i]) / 0.084114074707031 ); // modulo / frequency resolution
-			//printf("phaseArray indicies: i: %d  j: %d\n", freqInteger, freqDecimal);
+			printf("phaseArray indicies: i: %d  j: %d\n", freqInteger, freqDecimal);
 			for (j = 0; j < playbackBufferLenght; j++)
 			{	
 				playbackBuffer[j] += htole16(double_to_int16_t(volume * ((double)  (sin((foundPeakFrequency[0][i] + speakerOffset) * (2 * M_PI) * phaseArray[freqInteger][freqDecimal] / playbackRate)) )));
@@ -314,7 +328,7 @@ void *playTone(void *f)
 					//phase = 0;
 				//}
 			}
-		//	printf("Phase: %f\n", phaseArray[freqInteger][freqDecimal]);
+			printf("Phase: %f\n", phaseArray[freqInteger][freqDecimal]);
 		}
 
 
