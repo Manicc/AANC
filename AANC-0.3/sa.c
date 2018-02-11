@@ -59,8 +59,8 @@ void spectrumAnalyzer(){
 	int16_t *recordBuffer;
 	float* fRecordBuffer;
 	float *zeroPaddedRecordBuffer;
-	int zeroPaddedRecordBufferLenght = 524288; // 2^19
-	int recordBufferLenght = 8192;				// 2^15
+	int zeroPaddedRecordBufferLenght = 4194304;
+	int recordBufferLenght = 262144;
 	unsigned int recordRate = 44100;
 	
 	int err;
@@ -85,8 +85,8 @@ void spectrumAnalyzer(){
 
 	//allocate buffer of 16bit ints, as specified in PCM_FORMAT
 	recordBuffer = malloc(recordBufferLenght * snd_pcm_format_width(format) / 8 * 2); // 
-	fRecordBuffer = malloc(recordBufferLenght * sizeof(float));
-	zeroPaddedRecordBuffer = malloc(zeroPaddedRecordBufferLenght * sizeof(float));
+	fRecordBuffer = malloc(recordBufferLenght*sizeof(float));
+	zeroPaddedRecordBuffer = malloc(zeroPaddedRecordBufferLenght*sizeof(float));
 	
 	fprintf(stdout, "recordBuffer allocated\n");
 	
@@ -95,11 +95,10 @@ void spectrumAnalyzer(){
 	}
 		
 	float *FFTData;	
-	int NLOG2 = 19;
+	int NLOG2 = 22;
 	unsigned long N = 1 << NLOG2; // Used to determine maximum frequency count of FFT, "Bitwise left operation"
 	FFTData = malloc(N * sizeof(float));	
-	printf("N: %d\n", N);
-	float freqResolution = 0.084114074707031; // @N = 22 0.010514259338379;
+	float freqResolution = 0.010514259338379;
 	
 	
 	// Array to store all peak frequencies
@@ -119,7 +118,7 @@ void spectrumAnalyzer(){
 	BPF[501][0] = 1;
 	BPF[1000][0] = 1;
 	
-	float timeUnit = 1.0/44100.0; // PlaybackRate
+	float timeUnit = 1.0/960000.0;
 	for(i = 1; i <= 10000; i++){
 		for(j = 0; i < 96; i++){
 				// Phase calculation
@@ -140,7 +139,11 @@ void spectrumAnalyzer(){
 			//bufferIndexTimeOffset = timeResolution/timeShift;
 			phaseArray[i][j] = timeShift / timeUnit;
 			
-			
+			if(freq > 200 && freq < 201){
+				printf("200Hz\nAngle: %f\n", angle);
+				printf("Rad: %f\n", radPhase);
+				printf("timeShift: %f\n", timeShift);
+			}
 		}
 	}
 	
@@ -150,27 +153,17 @@ void spectrumAnalyzer(){
 	char frequencyReading[50];// TEMP used for data logging
 	char intensityReading[50]; 
 	
-	
 	while(1){
 	
-		int FFTComplete = 0;
-
 		internalPeakCount = 0;
-		
+		clock_gettime(CLOCK_MONOTONIC,&startTime);
 		
 		//Record audio to recordBuffer
-		
-		clock_gettime(CLOCK_MONOTONIC,&startTime);
 		snd_pcm_readi(capture_handle, recordBuffer, recordBufferLenght);
-		clock_gettime(CLOCK_MONOTONIC,&stopTime);
-		unsigned long long t = (stopTime.tv_nsec - startTime.tv_nsec);
-		printf("SAMPLE TIME: %llu s\n",t);
-		printf("\n");
-		
+
 		for (i = 0; i < recordBufferLenght; i++){
 			fRecordBuffer[i] = (float)recordBuffer[i] * (0.54 - (0.46 * (cos(2*M_PI*(i/(recordBufferLenght - 1)))))); // Convert to float, apply hammin window			
 		}
-		
 		
 		// Move recorded data to padded buffer
 		for(i = 0; i < recordBufferLenght; i++){
@@ -180,10 +173,6 @@ void spectrumAnalyzer(){
 		// Apply FFT to fRecordBuffer
 		fft_compute_forward(zeroPaddedRecordBuffer, NLOG2, FFTData, 1);	
 		
-		
-		
-		
-		//while(FFTComplete == 0);
 		
 
 		// Find frequency with the highest intensity(Amplitude)
@@ -223,7 +212,7 @@ void spectrumAnalyzer(){
 		
 		//if (file != NULL)
 		//{
-			//for(i = 0; i < zeroPaddedRecordBufferLenght / 4; i++){
+			//for(i = 0; i < zeroPaddedRecordBufferLenght/4; i++){
 				//sprintf(frequencyReading,"%f", i * freqResolution );
 				//sprintf(intensityReading,"%f", (FFTData[i] / peakIntensity) * 10000);
 				
@@ -240,9 +229,8 @@ void spectrumAnalyzer(){
 		//fprintf(stdout, "Data logging done\n");
 		
 
-} // End of while loop
+}// End of while loop
 
-	printf("CLOSING CAPTURE HANDLE");
 
 	snd_pcm_close(capture_handle);
 }
@@ -275,8 +263,6 @@ int fft_compute_forward(float * input, int log2_N, float * output, double sampli
 	}
 	gpu_fft_release(fft);
 	mbox_close(mb);
-	
-	return 1;
 }
 
 
@@ -290,7 +276,7 @@ int16_t double_to_int16_t (double x)
 
 void *playTone(void *f)
 {
-		int playbackRate = 44100;
+		int playbackRate = 960000;
 		int playbackBufferLenght = 11025;
 		
 		uint16_t playbackBuffer[playbackBufferLenght];
